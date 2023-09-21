@@ -1,773 +1,266 @@
-// Copyright 2019 Google LLC. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+Copyright 2022 Google LLC. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 
 'use strict';
 
+import { CastQueue } from './queuing.js';
+import { MediaFetcher } from './media_fetcher.js';
+import { AdsTracker, SenderTracker, ContentTracker } from './cast_analytics.js';
 
 /**
- * Media source root URL
- * @const
+ * @fileoverview This sample demonstrates how to build your own Web Receiver for
+ * use with Google Cast. The main receiver implementation is provided in this
+ * file which sets up access to the CastReceiverContext and PlayerManager. Some
+ * added functionality can be enabled by uncommenting some of the code blocks
+ * below.
  */
-var MEDIA_SOURCE_ROOT =
-    'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/';
 
-/**
- * Width of progress bar in pixel
- * @const
- */
-var PROGRESS_BAR_WIDTH = 600;
-
-/** @const {number} Time in milliseconds for minimal progress update */
-var TIMER_STEP = 1000;
-
-/** @const {number} Cast volume upon initial connection */
-var DEFAULT_VOLUME = 0.5;
-
-/** @const {number} Height, in pixels, of volume bar */
-var FULL_VOLUME_HEIGHT = 100;
-
-/**
- * Constants of states for media playback
- * @enum {string}
- */
-var PLAYER_STATE = {
-    IDLE: 'IDLE',
-    LOADING: 'LOADING',
-    LOADED: 'LOADED',
-    PLAYING: 'PLAYING',
-    PAUSED: 'PAUSED',
-    STOPPED: 'STOPPED',
-    ERROR: 'ERROR'
-};
-
-/**
- * Cast player object
- * Main variables:
- *  - PlayerHandler object for handling media playback
- *  - Cast player variables for controlling Cast mode media playback
- *  - Current media variables for transition between Cast and local modes
- * @struct @constructor
- */
-var CastPlayer = function() {
-    /** @type {PlayerHandler} Delegation proxy for media playback */
-    this.playerHandler = new PlayerHandler(this);
-
-    /** @type {PLAYER_STATE} A state for media playback */
-    this.playerState = PLAYER_STATE.IDLE;
-
-    /* Current media variables */
-    /** @type {number} A number for current media index */
-    this.currentMediaIndex = 0;
-    /** @type {number} A number for current media time */
-    this.currentMediaTime = 0;
-    /** @type {number} A number for current media duration */
-    this.currentMediaDuration = -1;
-    /** @type {?number} A timer for tracking progress of media */
-    this.timer = null;
-
-    /** @type {Object} media contents from JSON */
-    this.mediaContents = null;
-
-    /** @type {boolean} Fullscreen mode on/off */
-    this.fullscreen = false;
-
-    /** @type {function()} */
-    this.incrementMediaTimeHandler = this.incrementMediaTime.bind(this);
-
-    this.setupLocalPlayer();
-    this.addVideoThumbs();
-    this.initializeUI();
-};
 
 /*
- * PlayerHandler and setup functions
+ * Convenience variables to access the CastReceiverContext and PlayerManager.
  */
+const context = cast.framework.CastReceiverContext.getInstance();
+const playerManager = context.getPlayerManager();
+
+/*
+ * Constant to be used for fetching media by entity from sample repository.
+ */
+const ID_REGEX = '\/?([^\/]+)\/?$';
 
 /**
- * PlayerHandler
- *
- * This is a handler through which the application will interact
- * with both the RemotePlayer and LocalPlayer. Combining these two into
- * one interface is one approach to the dual-player nature of a Cast
- * Chrome application. Otherwise, the state of the RemotePlayer can be
- * queried at any time to decide whether to interact with the local
- * or remote players.
- *
- * To set the player used, implement the following methods for a target object
- * and call setTarget(target).
- *
- * Methods to implement:
- *  - play()
- *  - pause()
- *  - stop()
- *  - seekTo(time)
- *  - load(mediaIndex)
- *  - getMediaDuration()
- *  - getCurrentMediaTime()
- *  - setVolume(volumeSliderPosition)
- *  - mute()
- *  - unMute()
- *  - isMuted()
- *  - updateDisplayMessage()
+ * Debug Logger
  */
-var PlayerHandler = function(castPlayer) {
-    this.target = {};
+const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
+const LOG_RECEIVER_TAG = 'Receiver';
 
-    this.setTarget= function(target) {
-        this.target = target;
-    };
+/*
+ * WARNING: Make sure to turn off debug logger for production release as it
+ * may expose details of your app.
+ * Uncomment below line to enable debug logger, show a 'DEBUG MODE' tag at
+ * top left corner and show debug overlay.
+ */
+//  context.addEventListener(cast.framework.system.EventType.READY, () => {
+//   if (!castDebugLogger.debugOverlayElement_) {
+//     /**
+//      *  Enable debug logger and show a 'DEBUG MODE' tag at
+//      *  top left corner.
+//      */
+//       castDebugLogger.setEnabled(true);
 
-    this.play = function() {
-        if (castPlayer.playerState !== PLAYER_STATE.PLAYING &&
-            castPlayer.playerState !== PLAYER_STATE.PAUSED &&
-            castPlayer.playerState !== PLAYER_STATE.LOADED) {
-            this.load(castPlayer.currentMediaIndex);
-            return;
-        }
+//     /**
+//      * Show debug overlay.
+//      */
+//       castDebugLogger.showDebugLogs(true);
+//   }
+// });
 
-        this.target.play();
-        castPlayer.playerState = PLAYER_STATE.PLAYING;
-        document.getElementById('play').style.display = 'none';
-        document.getElementById('pause').style.display = 'block';
-        this.updateDisplayMessage();
-    };
+/*
+ * Set verbosity level for Core events.
+ */
+castDebugLogger.loggerLevelByEvents = {
+  'cast.framework.events.category.CORE':
+    cast.framework.LoggerLevel.INFO,
+  'cast.framework.events.EventType.MEDIA_STATUS':
+    cast.framework.LoggerLevel.DEBUG
+};
 
-    this.pause = function() {
-        if (castPlayer.playerState !== PLAYER_STATE.PLAYING) {
-            return;
-        }
+if (!castDebugLogger.loggerLevelByTags) {
+  castDebugLogger.loggerLevelByTags = {};
+}
 
-        this.target.pause();
-        castPlayer.playerState = PLAYER_STATE.PAUSED;
-        document.getElementById('play').style.display = 'block';
-        document.getElementById('pause').style.display = 'none';
-        this.updateDisplayMessage();
-    };
+/*
+ * Set verbosity level for custom tag.
+ * Enables log messages for error, warn, info and debug.
+ */
+castDebugLogger.loggerLevelByTags[LOG_RECEIVER_TAG] =
+  cast.framework.LoggerLevel.DEBUG;
 
-    this.stop = function() {
-        this.pause();
-        castPlayer.playerState = PLAYER_STATE.STOPPED;
-        this.updateDisplayMessage();
-    };
-
-    this.load = function(mediaIndex) {
-        castPlayer.playerState = PLAYER_STATE.LOADING;
-
-        document.getElementById('media_title').innerHTML =
-            castPlayer.mediaContents[castPlayer.currentMediaIndex]['title'];
-        document.getElementById('media_subtitle').innerHTML =
-            castPlayer.mediaContents[castPlayer.currentMediaIndex]['subtitle'];
-        document.getElementById('media_desc').innerHTML =
-            castPlayer.mediaContents[castPlayer.currentMediaIndex]['description'];
-
-        this.target.load(mediaIndex);
-        this.updateDisplayMessage();
-    };
-
-    this.loaded = function() {
-        castPlayer.currentMediaDuration = this.getMediaDuration();
-        castPlayer.updateMediaDuration();
-        castPlayer.playerState = PLAYER_STATE.LOADED;
-        if (castPlayer.currentMediaTime > 0) {
-            this.seekTo(castPlayer.currentMediaTime);
-        }
-        this.play();
-        castPlayer.startProgressTimer();
-        this.updateDisplayMessage();
-    };
-
-    this.getCurrentMediaTime = function() {
-        return this.target.getCurrentMediaTime();
-    };
-
-    this.getMediaDuration = function() {
-        return this.target.getMediaDuration();
-    };
-
-    this.updateDisplayMessage = function () {
-        this.target.updateDisplayMessage();
+/*
+ * Example of how to listen for events on playerManager.
+ */
+playerManager.addEventListener(
+  cast.framework.events.EventType.ERROR, (event) => {
+    castDebugLogger.error(LOG_RECEIVER_TAG,
+      'Detailed Error Code - ' + event.detailedErrorCode);
+    if (event && event.detailedErrorCode == 905) {
+      castDebugLogger.error(LOG_RECEIVER_TAG,
+        'LOAD_FAILED: Verify the load request is set up ' +
+        'properly and the media is able to play.');
     }
-;
-    this.setVolume = function(volumeSliderPosition) {
-        this.target.setVolume(volumeSliderPosition);
-    };
+});
 
-    this.mute = function() {
-        this.target.mute();
-        document.getElementById('audio_on').style.display = 'none';
-        document.getElementById('audio_off').style.display = 'block';
-    };
-
-    this.unMute = function() {
-        this.target.unMute();
-        document.getElementById('audio_on').style.display = 'block';
-        document.getElementById('audio_off').style.display = 'none';
-    };
-
-    this.isMuted = function() {
-        return this.target.isMuted();
-    };
-
-    this.seekTo = function(time) {
-        this.target.seekTo(time);
-        this.updateDisplayMessage();
-    };
-};
+/*
+ * Example analytics tracking implementation. To enable this functionality see
+ * the implmentation and complete the TODO item in ./google_analytics.js. Once
+ * complete uncomment the the calls to startTracking below to enable each
+ * Tracker.
+ */
+const adTracker = new AdsTracker();
+const senderTracker = new SenderTracker();
+const contentTracker = new ContentTracker();
+// adTracker.startTracking();
+// senderTracker.startTracking();
+// contentTracker.startTracking();
 
 /**
- * Set the PlayerHandler target to use the video-element player
+ * Modifies the provided mediaInformation by adding a pre-roll break clip to it.
+ * @param {cast.framework.messages.MediaInformation} mediaInformation The target
+ * MediaInformation to be modified.
+ * @return {Promise} An empty promise.
  */
-CastPlayer.prototype.setupLocalPlayer = function () {
-    var localPlayer = document.getElementById('video_element');
-    localPlayer.addEventListener(
-        'loadeddata', this.onMediaLoadedLocally.bind(this));
+function addBreaks(mediaInformation) {
+  castDebugLogger.debug(LOG_RECEIVER_TAG, "addBreaks: " +
+    JSON.stringify(mediaInformation));
+  return MediaFetcher.fetchMediaById('fbb_ad')
+  .then((clip1) => {
+    mediaInformation.breakClips = [
+      {
+        id: 'fbb_ad',
+        title: clip1.title,
+        contentUrl: clip1.stream.dash,
+        contentType: 'application/dash+xml',
+        whenSkippable: 5
+      }
+    ];
 
-    // This object will implement PlayerHandler callbacks with localPlayer
-    var playerTarget = {};
+    mediaInformation.breaks = [
+      {
+        id: 'pre-roll',
+        breakClipIds: ['fbb_ad'],
+        position: 0
+      }
+    ];
+  });
+}
 
-    playerTarget.play = function() {
-        localPlayer.play();
-
-        var vi = document.getElementById('video_image');
-        vi.style.display = 'none';
-        localPlayer.style.display = 'block';
-    };
-
-    playerTarget.pause = function () {
-        localPlayer.pause();
-    };
-
-    playerTarget.stop = function () {
-        localPlayer.stop();
-    };
-
-    playerTarget.load = function(mediaIndex) {
-        localPlayer.src =
-            this.mediaContents[mediaIndex]['sources'][0];
-        localPlayer.load();
-    }.bind(this);
-
-    playerTarget.getCurrentMediaTime = function() {
-        return localPlayer.currentTime;
-    };
-
-    playerTarget.getMediaDuration = function() {
-        return localPlayer.duration;
-    };
-
-    playerTarget.updateDisplayMessage = function () {
-        document.getElementById('playerstate').style.display = 'none';
-        document.getElementById('playerstatebg').style.display = 'none';
-        document.getElementById('video_image_overlay').style.display = 'none';
-    };
-
-    playerTarget.setVolume = function(volumeSliderPosition) {
-        localPlayer.volume = volumeSliderPosition < FULL_VOLUME_HEIGHT ?
-            volumeSliderPosition / FULL_VOLUME_HEIGHT : 1;
-        var p = document.getElementById('audio_bg_level');
-        p.style.height = volumeSliderPosition + 'px';
-        p.style.marginTop = -volumeSliderPosition + 'px';
-    };
-
-    playerTarget.mute = function() {
-        localPlayer.muted = true;
-    };
-
-    playerTarget.unMute = function() {
-        localPlayer.muted = false;
-    };
-
-    playerTarget.isMuted = function() {
-        return localPlayer.muted;
-    };
-
-    playerTarget.seekTo = function(time) {
-        localPlayer.currentTime = time;
-    };
-
-    this.playerHandler.setTarget(playerTarget);
-
-    this.playerHandler.setVolume(DEFAULT_VOLUME * FULL_VOLUME_HEIGHT);
-
-    this.showFullscreenButton();
-
-    if (this.currentMediaTime > 0) {
-        this.playerHandler.play();
-    }
-};
-
-
-/**
- * Callback when media is loaded in local player
+/*
+ * Intercept the LOAD request to load and set the contentUrl.
  */
-CastPlayer.prototype.onMediaLoadedLocally = function() {
-    var localPlayer = document.getElementById('video_element');
-    localPlayer.currentTime = this.currentMediaTime;
+playerManager.setMessageInterceptor(
+  cast.framework.messages.MessageType.LOAD, loadRequestData => {
+    castDebugLogger.debug(LOG_RECEIVER_TAG,
+      `loadRequestData: ${JSON.stringify(loadRequestData)}`);
 
-    this.playerHandler.loaded();
-};
-
-/**
- * Select a media content
- * @param {number} mediaIndex A number for media index
- */
-CastPlayer.prototype.selectMedia = function(mediaIndex) {
-    console.log('Media index selected: ' + mediaIndex);
-
-    this.currentMediaIndex = mediaIndex;
-
-    // Set video image
-    var vi = document.getElementById('video_image');
-    vi.src = MEDIA_SOURCE_ROOT + this.mediaContents[mediaIndex]['thumb'];
-
-    // Reset progress bar
-    var pi = document.getElementById('progress_indicator');
-    var p = document.getElementById('progress');
-    p.style.width = '0px';
-    pi.style.marginLeft = -21 - PROGRESS_BAR_WIDTH + 'px';
-
-    // Reset currentMediaTime
-    this.currentMediaTime = 0;
-
-    this.playerState = PLAYER_STATE.IDLE;
-    this.playerHandler.play();
-};
-
-/**
- * Media seek function
- * @param {Event} event An event object from seek
- */
-CastPlayer.prototype.seekMedia = function(event) {
-    var pos = parseInt(event.offsetX, 10);
-    var pi = document.getElementById('progress_indicator');
-    var p = document.getElementById('progress');
-    if (event.currentTarget.id == 'progress_indicator') {
-        var curr = parseInt(
-            this.currentMediaTime + this.currentMediaDuration * pos /
-            PROGRESS_BAR_WIDTH, 10);
-        var pp = parseInt(pi.style.marginLeft, 10) + pos;
-        var pw = parseInt(p.style.width, 10) + pos;
-    } else {
-        var curr = parseInt(
-            pos * this.currentMediaDuration / PROGRESS_BAR_WIDTH, 10);
-        var pp = pos - 21 - PROGRESS_BAR_WIDTH;
-        var pw = pos;
+    // If the loadRequestData is incomplete, return an error message.
+    if (!loadRequestData || !loadRequestData.media) {
+      const error = new cast.framework.messages.ErrorData(
+        cast.framework.messages.ErrorType.LOAD_FAILED);
+      error.reason = cast.framework.messages.ErrorReason.INVALID_REQUEST;
+      return error;
     }
 
-    if (this.playerState === PLAYER_STATE.PLAYING ||
-        this.playerState === PLAYER_STATE.PAUSED) {
-        this.currentMediaTime = curr;
-        p.style.width = pw + 'px';
-        pi.style.marginLeft = pp + 'px';
+    // Check all content source fields for the asset URL or ID.
+    let source = loadRequestData.media.contentUrl
+      || loadRequestData.media.entity || loadRequestData.media.contentId;
+
+    // If there is no source or a malformed ID then return an error.
+    if (!source || source == "" || !source.match(ID_REGEX)) {
+      let error = new cast.framework.messages.ErrorData(
+        cast.framework.messages.ErrorType.LOAD_FAILED);
+      error.reason = cast.framework.messages.ErrorReason.INVALID_REQUEST;
+      return error;
     }
 
-    this.playerHandler.seekTo(curr);
-};
+    let sourceId = source.match(ID_REGEX)[1];
 
-/**
- * Set current player volume
- * @param {Event} mouseEvent
+    // Optionally add breaks to the media information and set the contentUrl.
+    return Promise.resolve()
+    // .then(() => addBreaks(loadRequestData.media)) // Uncomment to enable ads.
+    .then(() => {
+      // If the source is a url that points to an asset don't fetch from the
+      // content repository.
+      if (sourceId.includes('.')) {
+        castDebugLogger.debug(LOG_RECEIVER_TAG,
+          "Interceptor received full URL");
+        loadRequestData.media.contentUrl = source;
+        return loadRequestData;
+      } else {
+        // Fetch the contentUrl if provided an ID or entity URL.
+        castDebugLogger.debug(LOG_RECEIVER_TAG, "Interceptor received ID");
+        return MediaFetcher.fetchMediaInformationById(sourceId)
+        .then((mediaInformation) => {
+          loadRequestData.media = mediaInformation;
+          return loadRequestData;
+        })
+      }
+    })
+    .catch((errorMessage) => {
+      let error = new cast.framework.messages.ErrorData(
+        cast.framework.messages.ErrorType.LOAD_FAILED);
+      error.reason = cast.framework.messages.ErrorReason.INVALID_REQUEST;
+      castDebugLogger.error(LOG_RECEIVER_TAG, errorMessage);
+      return error;
+    });
+  }
+);
+
+
+/*
+ * Set the control buttons in the UI controls.
  */
-CastPlayer.prototype.setVolume = function(mouseEvent) {
-    var p = document.getElementById('audio_bg_level');
-    var pos = 0;
-    if (mouseEvent.currentTarget.id === 'audio_bg_track') {
-        pos = FULL_VOLUME_HEIGHT - parseInt(mouseEvent.offsetY, 10);
-    } else {
-        pos = parseInt(p.clientHeight, 10) - parseInt(mouseEvent.offsetY, 10);
-    }
-    this.playerHandler.setVolume(pos);
-};
+const controls = cast.framework.ui.Controls.getInstance();
+controls.clearDefaultSlotAssignments();
 
-/**
- * Starts the timer to increment the media progress bar
+// Assign buttons to control slots.
+controls.assignButton(
+  cast.framework.ui.ControlsSlot.SLOT_SECONDARY_1,
+  cast.framework.ui.ControlsButton.QUEUE_PREV
+);
+controls.assignButton(
+  cast.framework.ui.ControlsSlot.SLOT_PRIMARY_1,
+  cast.framework.ui.ControlsButton.CAPTIONS
+);
+controls.assignButton(
+  cast.framework.ui.ControlsSlot.SLOT_PRIMARY_2,
+  cast.framework.ui.ControlsButton.SEEK_FORWARD_15
+);
+controls.assignButton(
+  cast.framework.ui.ControlsSlot.SLOT_SECONDARY_2,
+  cast.framework.ui.ControlsButton.QUEUE_NEXT
+);
+
+/*
+ * Configure the CastReceiverOptions.
  */
-CastPlayer.prototype.startProgressTimer = function() {
-    this.stopProgressTimer();
+const castReceiverOptions = new cast.framework.CastReceiverOptions();
 
-    // Start progress timer
-    this.timer =
-        setInterval(this.incrementMediaTimeHandler, TIMER_STEP);
-};
-
-/**
- * Stops the timer to increment the media progress bar
+/*
+ * Set the player configuration.
  */
-CastPlayer.prototype.stopProgressTimer = function() {
-    if (this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
-    }
-};
+const playbackConfig = new cast.framework.PlaybackConfig();
+playbackConfig.autoResumeDuration = 5;
+castReceiverOptions.playbackConfig = playbackConfig;
+castDebugLogger.info(LOG_RECEIVER_TAG,
+  `autoResumeDuration set to: ${playbackConfig.autoResumeDuration}`);
 
-/**
- * Helper function
- * Increment media current position by 1 second
+/* 
+ * Set the SupportedMediaCommands.
  */
-CastPlayer.prototype.incrementMediaTime = function() {
-    // First sync with the current player's time
-    this.currentMediaTime = this.playerHandler.getCurrentMediaTime();
-    this.currentMediaDuration = this.playerHandler.getMediaDuration();
+castReceiverOptions.supportedCommands =
+  cast.framework.messages.Command.ALL_BASIC_MEDIA |
+  cast.framework.messages.Command.QUEUE_PREV |
+  cast.framework.messages.Command.QUEUE_NEXT |
+  cast.framework.messages.Command.STREAM_TRANSFER
 
-    if (this.playerState === PLAYER_STATE.PLAYING) {
-        if (this.currentMediaTime < this.currentMediaDuration) {
-            this.currentMediaTime += 1;
-            this.updateProgressBarByTimer();
-        } else {
-            this.endPlayback();
-        }
-    }
-};
-
-/**
- * Update progress bar based on timer
+/*
+ * Optionally enable a custom queue implementation. Custom queues allow the
+ * receiver app to manage and add content to the playback queue. Uncomment the
+ * line below to enable the queue.
  */
-CastPlayer.prototype.updateProgressBarByTimer = function() {
-    var p = document.getElementById('progress');
-    if (isNaN(parseInt(p.style.width, 10))) {
-        p.style.width = 0;
-    }
-    if (this.currentMediaDuration > 0) {
-        var pp = Math.floor(
-            PROGRESS_BAR_WIDTH * this.currentMediaTime / this.currentMediaDuration);
-    }
+// castReceiverOptions.queue = new CastQueue();
 
-    p.style.width = pp + 'px';
-    var pi = document.getElementById('progress_indicator');
-    pi.style.marginLeft = -21 - PROGRESS_BAR_WIDTH + pp + 'px';
-
-    if (pp >= PROGRESS_BAR_WIDTH) {
-        this.endPlayback();
-    }
-};
-
-/**
- *  End playback. Called when media ends.
- */
-CastPlayer.prototype.endPlayback = function() {
-    this.currentMediaTime = 0;
-    this.stopProgressTimer();
-    this.playerState = PLAYER_STATE.IDLE;
-    this.playerHandler.updateDisplayMessage();
-
-    document.getElementById('play').style.display = 'block';
-    document.getElementById('pause').style.display = 'none';
-};
-
-/**
- * @param {number} durationInSec
- * @return {string}
- */
-CastPlayer.getDurationString = function(durationInSec) {
-    var durationString = '' + Math.floor(durationInSec % 60);
-    var durationInMin = Math.floor(durationInSec / 60);
-    if (durationInMin === 0) {
-        return durationString;
-    }
-    durationString = (durationInMin % 60) + ':' + durationString;
-    var durationInHour = Math.floor(durationInMin / 60);
-    if (durationInHour === 0) {
-        return durationString;
-    }
-    return durationInHour + ':' + durationString;
-};
-
-/**
- * Updates media duration text in UI
- */
-CastPlayer.prototype.updateMediaDuration = function() {
-    document.getElementById('duration').innerHTML =
-        CastPlayer.getDurationString(this.currentMediaDuration);
-};
-
-/**
- * Request full screen mode
- */
-CastPlayer.prototype.requestFullScreen = function() {
-    // Supports most browsers and their versions.
-    var element = document.getElementById('video_element');
-    var requestMethod =
-        element['requestFullScreen'] || element['webkitRequestFullScreen'];
-
-    if (requestMethod) { // Native full screen.
-        requestMethod.call(element);
-        console.log('Requested fullscreen');
-    }
-};
-
-
-/**
- * Exit full screen mode
- */
-CastPlayer.prototype.cancelFullScreen = function() {
-    // Supports most browsers and their versions.
-    var requestMethod =
-        document['cancelFullScreen'] || document['webkitCancelFullScreen'];
-
-    if (requestMethod) {
-        requestMethod.call(document);
-    }
-};
-
-
-/**
- * Exit fullscreen mode by escape
- */
-CastPlayer.prototype.fullscreenChangeHandler = function() {
-    this.fullscreen = !this.fullscreen;
-};
-
-
-/**
- * Show expand/collapse fullscreen button
- */
-CastPlayer.prototype.showFullscreenButton = function() {
-    if (this.fullscreen) {
-        document.getElementById('fullscreen_expand').style.display = 'none';
-        document.getElementById('fullscreen_collapse').style.display = 'block';
-    } else {
-        document.getElementById('fullscreen_expand').style.display = 'block';
-        document.getElementById('fullscreen_collapse').style.display = 'none';
-    }
-};
-
-
-/**
- * Hide expand/collapse fullscreen button
- */
-CastPlayer.prototype.hideFullscreenButton = function() {
-    document.getElementById('fullscreen_expand').style.display = 'none';
-    document.getElementById('fullscreen_collapse').style.display = 'none';
-};
-
-/**
- * Show the media control
- */
-CastPlayer.prototype.showMediaControl = function() {
-    document.getElementById('media_control').style.opacity = 0.7;
-};
-
-
-/**
- * Hide the media control
- */
-CastPlayer.prototype.hideMediaControl = function() {
-    document.getElementById('media_control').style.opacity = 0;
-};
-
-
-/**
- * Show the volume slider
- */
-CastPlayer.prototype.showVolumeSlider = function() {
-    if (!this.playerHandler.isMuted()) {
-        document.getElementById('audio_bg').style.opacity = 1;
-        document.getElementById('audio_bg_track').style.opacity = 1;
-        document.getElementById('audio_bg_level').style.opacity = 1;
-        document.getElementById('audio_indicator').style.opacity = 1;
-    }
-};
-
-/**
- * Hide the volume slider
- */
-CastPlayer.prototype.hideVolumeSlider = function() {
-    document.getElementById('audio_bg').style.opacity = 0;
-    document.getElementById('audio_bg_track').style.opacity = 0;
-    document.getElementById('audio_bg_level').style.opacity = 0;
-    document.getElementById('audio_indicator').style.opacity = 0;
-};
-
-/**
- * Reset the volume slider
- */
-CastPlayer.prototype.resetVolumeSlider = function() {
-    var volumeTrackHeight = document.getElementById('audio_bg_track').clientHeight;
-    var defaultVolumeSliderHeight = DEFAULT_VOLUME * volumeTrackHeight;
-    document.getElementById('audio_bg_level').style.height =
-        defaultVolumeSliderHeight + 'px';
-    document.getElementById('audio_on').style.display = 'block';
-    document.getElementById('audio_off').style.display = 'none';
-};
-
-/**
- * Initialize UI components and add event listeners
- */
-CastPlayer.prototype.initializeUI = function() {
-    // Set initial values for title, subtitle, and description
-    document.getElementById('media_title').innerHTML =
-        this.mediaContents[0]['title'];
-    document.getElementById('media_subtitle').innerHTML =
-        this.mediaContents[this.currentMediaIndex]['subtitle'];
-    document.getElementById('media_desc').innerHTML =
-        this.mediaContents[this.currentMediaIndex]['description'];
-
-    // Add event handlers to UI components
-    document.getElementById('progress_bg').addEventListener(
-        'click', this.seekMedia.bind(this));
-    document.getElementById('progress').addEventListener(
-        'click', this.seekMedia.bind(this));
-    document.getElementById('progress_indicator').addEventListener(
-       'dragend', this.seekMedia.bind(this));
-    document.getElementById('audio_on').addEventListener(
-        'click', this.playerHandler.mute.bind(this.playerHandler));
-    document.getElementById('audio_off').addEventListener(
-        'click', this.playerHandler.unMute.bind(this.playerHandler));
-    document.getElementById('audio_bg').addEventListener(
-        'mouseover', this.showVolumeSlider.bind(this));
-    document.getElementById('audio_on').addEventListener(
-        'mouseover', this.showVolumeSlider.bind(this));
-    document.getElementById('audio_bg_level').addEventListener(
-        'mouseover', this.showVolumeSlider.bind(this));
-    document.getElementById('audio_bg_track').addEventListener(
-        'mouseover', this.showVolumeSlider.bind(this));
-    document.getElementById('audio_bg_level').addEventListener(
-        'click', this.setVolume.bind(this));
-    document.getElementById('audio_bg_track').addEventListener(
-        'click', this.setVolume.bind(this));
-    document.getElementById('audio_bg').addEventListener(
-        'mouseout', this.hideVolumeSlider.bind(this));
-    document.getElementById('audio_on').addEventListener(
-        'mouseout', this.hideVolumeSlider.bind(this));
-    document.getElementById('main_video').addEventListener(
-        'mouseover', this.showMediaControl.bind(this));
-    document.getElementById('main_video').addEventListener(
-        'mouseout', this.hideMediaControl.bind(this));
-    document.getElementById('media_control').addEventListener(
-        'mouseover', this.showMediaControl.bind(this));
-    document.getElementById('media_control').addEventListener(
-        'mouseout', this.hideMediaControl.bind(this));
-    document.getElementById('fullscreen_expand').addEventListener(
-        'click', this.requestFullScreen.bind(this));
-    document.getElementById('fullscreen_collapse').addEventListener(
-        'click', this.cancelFullScreen.bind(this));
-    document.addEventListener(
-        'fullscreenchange', this.fullscreenChangeHandler.bind(this), false);
-    document.addEventListener(
-        'webkitfullscreenchange', this.fullscreenChangeHandler.bind(this), false);
-
-    // Enable play/pause buttons
-    document.getElementById('play').addEventListener(
-        'click', this.playerHandler.play.bind(this.playerHandler));
-    document.getElementById('pause').addEventListener(
-        'click', this.playerHandler.pause.bind(this.playerHandler));
-    document.getElementById('progress_indicator').draggable = true;
-};
-
-/**
- * Add video thumbnails div's to UI for media JSON contents
- */
-CastPlayer.prototype.addVideoThumbs = function() {
-    this.mediaContents = mediaJSON['categories'][0]['videos'];
-    var ni = document.getElementById('carousel');
-    var newdiv = null;
-    var divIdName = null;
-    for (var i = 0; i < this.mediaContents.length; i++) {
-        newdiv = document.createElement('div');
-        divIdName = 'thumb' + i + 'Div';
-        newdiv.setAttribute('id', divIdName);
-        newdiv.setAttribute('class', 'thumb');
-        newdiv.innerHTML =
-            '<img src="' + MEDIA_SOURCE_ROOT + this.mediaContents[i]['thumb'] +
-            '" class="thumbnail">';
-        newdiv.addEventListener('click', this.selectMedia.bind(this, i));
-        ni.appendChild(newdiv);
-    }
-};
-
-/**
- * Hardcoded media json objects
- */
-var mediaJSON = { 'categories' : [{ 'name' : 'Movies',
-    'videos' : [
-        { 'description' : "Big Buck Bunny tells the story of a giant rabbit with a heart bigger than himself. When one sunny day three rodents rudely harass him, something snaps... and the rabbit ain't no bunny anymore! In the typical cartoon tradition he prepares the nasty rodents a comical revenge.\n\nLicensed under the Creative Commons Attribution license\nhttp://www.bigbuckbunny.org",
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'],
-            'subtitle' : 'By Blender Foundation',
-            'thumb' : 'images/BigBuckBunny.jpg',
-            'title' : 'Big Buck Bunny'
-        },
-        { 'description' : 'The first Blender Open Movie from 2006',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4'],
-            'subtitle' : 'By Blender Foundation',
-            'thumb' : 'images/ElephantsDream.jpg',
-            'title' : 'Elephant Dream'
-        },
-        { 'description' : 'HBO GO now works with Chromecast -- the easiest way to enjoy online video on your TV. For when you want to settle into your Iron Throne to watch the latest episodes. For $35.\nLearn how to use Chromecast with HBO GO and more at google.com/chromecast.',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'],
-            'subtitle' : 'By Google',
-            'thumb' : 'images/ForBiggerBlazes.jpg',
-            'title' : 'For Bigger Blazes'
-        },
-        { 'description' : "Introducing Chromecast. The easiest way to enjoy online video and music on your TV. For when Batman's escapes aren't quite big enough. For $35. Learn how to use Chromecast with Google Play Movies and more at google.com/chromecast.",
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4'],
-            'subtitle' : 'By Google',
-            'thumb' : 'images/ForBiggerEscapes.jpg',
-            'title' : 'For Bigger Escape'
-        },
-        { 'description' : 'Introducing Chromecast. The easiest way to enjoy online video and music on your TV. For $35.  Find out more at google.com/chromecast.',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4'],
-            'subtitle' : 'By Google',
-            'thumb' : 'images/ForBiggerFun.jpg',
-            'title' : 'For Bigger Fun'
-        },
-        { 'description' : 'Introducing Chromecast. The easiest way to enjoy online video and music on your TV. For the times that call for bigger joyrides. For $35. Learn how to use Chromecast with YouTube and more at google.com/chromecast.',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4'],
-            'subtitle' : 'By Google',
-            'thumb' : 'images/ForBiggerJoyrides.jpg',
-            'title' : 'For Bigger Joyrides'
-        },
-        { 'description' : "Introducing Chromecast. The easiest way to enjoy online video and music on your TV. For when you want to make Buster's big meltdowns even bigger. For $35. Learn how to use Chromecast with Netflix and more at google.com/chromecast.",
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4'],
-            'subtitle' : 'By Google',
-            'thumb' : 'images/ForBiggerMeltdowns.jpg',
-            'title' : 'For Bigger Meltdowns'
-        },
-        { 'description' : 'Sintel is an independently produced short film, initiated by the Blender Foundation as a means to further improve and validate the free/open source 3D creation suite Blender. With initial funding provided by 1000s of donations via the internet community, it has again proven to be a viable development model for both open 3D technology as for independent animation film.\nThis 15 minute film has been realized in the studio of the Amsterdam Blender Institute, by an international team of artists and developers. In addition to that, several crucial technical and creative targets have been realized online, by developers and artists and teams all over the world.\nwww.sintel.org',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4'],
-            'subtitle' : 'By Blender Foundation',
-            'thumb' : 'images/Sintel.jpg',
-            'title' : 'Sintel'
-        },
-        { 'description' : 'Smoking Tire takes the all-new Subaru Outback to the highest point we can find in hopes our customer-appreciation Balloon Launch will get some free T-shirts into the hands of our viewers.',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/SubaruOutbackOnStreetAndDirt.mp4'],
-            'subtitle' : 'By Garage419',
-            'thumb' : 'images/SubaruOutbackOnStreetAndDirt.jpg',
-            'title' : 'Subaru Outback On Street And Dirt'
-        },
-        { 'description' : 'Tears of Steel was realized with crowd-funding by users of the open source 3D creation tool Blender. Target was to improve and test a complete open and free pipeline for visual effects in film - and to make a compelling sci-fi film in Amsterdam, the Netherlands.  The film itself, and all raw material used for making it, have been released under the Creatieve Commons 3.0 Attribution license. Visit the tearsofsteel.org website to find out more about this, or to purchase the 4-DVD box with a lot of extras.  (CC) Blender Foundation - http://www.tearsofsteel.org',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4'],
-            'subtitle' : 'By Blender Foundation',
-            'thumb' : 'images/TearsOfSteel.jpg',
-            'title' : 'Tears of Steel'
-        },
-        { 'description' : "The Smoking Tire heads out to Adams Motorsports Park in Riverside, CA to test the most requested car of 2010, the Volkswagen GTI. Will it beat the Mazdaspeed3's standard-setting lap time? Watch and see...",
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/VolkswagenGTIReview.mp4'],
-            'subtitle' : 'By Garage419',
-            'thumb' : 'images/VolkswagenGTIReview.jpg',
-            'title' : 'Volkswagen GTI Review'
-        },
-        { 'description' : 'The Smoking Tire is going on the 2010 Bullrun Live Rally in a 2011 Shelby GT500, and posting a video from the road every single day! The only place to watch them is by subscribing to The Smoking Tire or watching at BlackMagicShine.com',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4'],
-            'subtitle' : 'By Garage419',
-            'thumb' : 'images/WeAreGoingOnBullrun.jpg',
-            'title' : 'We Are Going On Bullrun'
-        },
-        { 'description' : 'The Smoking Tire meets up with Chris and Jorge from CarsForAGrand.com to see just how far $1,000 can go when looking for a car. The Smoking Tire meets up with Chris and Jorge from CarsForAGrand.com to see just how far $1,000 can go when looking for a car.',
-            'sources' : ['http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4'],
-            'subtitle' : 'By Garage419',
-            'thumb' : 'images/WhatCarCanYouGetForAGrand.jpg',
-            'title' : 'What care can you get for a grand?'
-        }
-    ]}]};
+context.start(castReceiverOptions);
