@@ -17,7 +17,6 @@ limitations under the License.
 
 'use strict';
 
-import { CastQueue } from './queuing.js';
 import { MediaFetcher } from './media_fetcher.js';
 import { AdsTracker, SenderTracker, ContentTracker } from './cast_analytics.js';
 
