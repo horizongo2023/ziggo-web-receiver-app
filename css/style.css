@@ -1,0 +1,11 @@
+body{
+    --playback-logo-image: url('')
+}
+cast-media-player {
+    --theme-hue: 100;
+  --progress-color: rgb(0, 255, 0);
+  --splash-size: cover;
+  --logo-image:url('images/logo.png');
+  --logo-color: rgb(0,20,0);
+   text-align: center;
+}
