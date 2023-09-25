@@ -12,10 +12,12 @@
   <footer>
     <script>
       const context = cast.framework.CastReceiverContext.getInstance();
-      var castSession = cast.framework.CastContext.getInstance().getCurrentSession();
-      console.log(castContext)
-      console.log(castSession)
+      const playerManager = context.getPlayerManager();
 
+      playerManager.addEventListener(
+        cast.framework.events.EventType.REQUEST_LOAD, (event) => {
+          console.log(event);
+        });
     </script>
   </footer>
 </body>
