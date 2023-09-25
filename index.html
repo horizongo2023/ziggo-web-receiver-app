@@ -13,10 +13,6 @@
     <script>
       try {
         const context = cast.framework.CastReceiverContext.getInstance();
-        const option = new cast.framework.CastReceiverOptions();
-        option.maxInactivity = 3600;
-        context.start(option);
-        const playerManager = context.getPlayerManager();
         context.start();
         console.log("context val${context}");
       } catch (e) {
