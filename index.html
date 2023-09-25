@@ -1,18 +1,23 @@
 
 <!DOCTYPE html>
 <html>
-
 <head>
   <link rel="stylesheet" href="css/style.css" media="screen" />
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-  <script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
+
 </head>
 
 <body>
   <cast-media-player></cast-media-player>
   <footer>
-    <script src="js/cast_videos.js" type="module">
-      
+    <script>
+      const context = cast.framework.CastReceiverContext.getInstance();
+      const option  = new cast.framework.CastReceiverOptions();
+      option.maxInactivity = 3600;
+      context.start(option);
+      const playerManager = context.getPlayerManager();
+      context.start();
+      console.log("context val${context}");
     </script>
   </footer>
 </body>
