@@ -11,13 +11,9 @@
   <cast-media-player></cast-media-player>
   <footer>
     <script>
-
-
-      cast.framework.CastContext.getInstance().setOptions({
-        receiverApplicationId: '9E193634',
-        autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
-      });
+      var castContext =  cast.framework.CastContext.getInstance();
       var castSession = cast.framework.CastContext.getInstance().getCurrentSession();
+      console.log(castContext)
       console.log(castSession)
 
     </script>
