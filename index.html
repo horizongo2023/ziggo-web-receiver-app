@@ -13,7 +13,10 @@
     <script>
 
 
-      initializeCastApi();
+      cast.framework.CastContext.getInstance().setOptions({
+        receiverApplicationId: '9E193634',
+        autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+      });
       var castSession = cast.framework.CastContext.getInstance().getCurrentSession();
       console.log(castSession)
 
@@ -22,10 +25,3 @@
 </body>
 
 </html>
-
-initializeCastApi = function() {
-cast.framework.CastContext.getInstance().setOptions({
-receiverApplicationId: '9E193634',
-autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
-});
-};
