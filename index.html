@@ -15,9 +15,38 @@
       const playerManager = context.getPlayerManager();
 
       playerManager.addEventListener(
-        cast.framework.events.EventType.REQUEST_LOAD, (event) => {
+        cast.framework.events.EventType.MEDIA_STATUS, (event) => {
           console.log(event);
         });
+      playerManager.setMessageInterceptor(
+    cast.framework.messages.MessageType.LOAD, loadRequestData => {
+      const error = new cast.framework.messages.ErrorData(
+                      cast.framework.messages.ErrorType.LOAD_FAILED);
+      if (!loadRequestData.media) {
+        error.reason = cast.framework.messages.ErrorReason.INVALID_PARAM;
+        return error;
+      }
+
+      if (!loadRequestData.media.entity) {
+        return loadRequestData;
+      }
+
+      return thirdparty.fetchAssetAndAuth(loadRequestData.media.entity,
+                                          loadRequestData.credentials)
+        .then(asset => {
+          if (!asset) {
+            throw cast.framework.messages.ErrorReason.INVALID_REQUEST;
+          }
+
+          loadRequestData.media.contentUrl = asset.url;
+          loadRequestData.media.metadata = asset.metadata;
+          loadRequestData.media.tracks = asset.tracks;
+          return loadRequestData;
+        }).catch(reason => {
+          error.reason = reason; // cast.framework.messages.ErrorReason
+          return error;
+        });
+    });
     </script>
   </footer>
 </body>
