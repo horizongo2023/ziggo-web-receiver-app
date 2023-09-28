@@ -12,41 +12,37 @@
   <footer>
     <script>
       const context = cast.framework.CastReceiverContext.getInstance();
+
+      const cartSession = context.getCurrentSession();
+
+      console.log(cartSession);
+
       const playerManager = context.getPlayerManager();
 
       playerManager.addEventListener(
         cast.framework.events.EventType.MEDIA_STATUS, (event) => {
           console.log(event);
         });
-      playerManager.setMessageInterceptor(
-    cast.framework.messages.MessageType.LOAD, loadRequestData => {
-      const error = new cast.framework.messages.ErrorData(
-                      cast.framework.messages.ErrorType.LOAD_FAILED);
-      if (!loadRequestData.media) {
-        error.reason = cast.framework.messages.ErrorReason.INVALID_PARAM;
-        return error;
-      }
 
-      if (!loadRequestData.media.entity) {
-        return loadRequestData;
-      }
+        /// player state event listner....
+        playerManager.addEventListener(
+          cast.framework.event.EventType.PLAYER_STATE_CHANGED,
+          function(event){
+            switch(event.PlayerState){
+              case cast.framework.messages.PlayerState.BUFFERING:
+              ///Media Buffering
+               break;
+               case cast.framework.messages.PlayerState.PLAYING:
+                /// Media Playing
+                break;
+                case cast.framework.messages.PlayerState.PAUSED:
+                  break;
 
-      return thirdparty.fetchAssetAndAuth(loadRequestData.media.entity,
-                                          loadRequestData.credentials)
-        .then(asset => {
-          if (!asset) {
-            throw cast.framework.messages.ErrorReason.INVALID_REQUEST;
+            }
+              
           }
-
-          loadRequestData.media.contentUrl = asset.url;
-          loadRequestData.media.metadata = asset.metadata;
-          loadRequestData.media.tracks = asset.tracks;
-          return loadRequestData;
-        }).catch(reason => {
-          error.reason = reason; // cast.framework.messages.ErrorReason
-          return error;
-        });
-    });
+        );
+      context.start();
     </script>
   </footer>
 </body>
