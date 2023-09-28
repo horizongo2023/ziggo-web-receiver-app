@@ -11,22 +11,18 @@
   <cast-media-player></cast-media-player>
   <footer>
     <script>
-      const context = cast.framework.CastReceiverContext.getInstance();
+      try{
+        const context = cast.framework.CastReceiverContext.getInstance();
       const playerManager = context.getPlayerManager();
-
-      playerManager.load(
-        {
+      playerManager.load({
            'contentID':"",
            'contentType':"video/mp4",
            'streamType':cast.framework.messages.streamType.BUFFERED
-        }
-      );
-
+      });
       playerManager.addEventListener(
         cast.framework.events.EventType.MEDIA_STATUS, (event) => {
           console.log(event);
         });
-
         /// player state event listner....
         playerManager.addEventListener(
           cast.framework.event.EventType.PLAYER_STATE_CHANGED,
@@ -41,11 +37,13 @@
                 case cast.framework.messages.PlayerState.PAUSED:
                   break;
 
-            }
-              
+            } 
           }
         );
-      context.start();
+        context.start();
+      }catch(e){
+          console.log(e);
+      }
     </script>
   </footer>
 </body>
