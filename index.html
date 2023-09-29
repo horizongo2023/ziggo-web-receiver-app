@@ -12,8 +12,17 @@
   <footer>
     <script>
       try{
-        const context = cast.framework.CastReceiverContext.getInstance();
+      const context = cast.framework.CastReceiverContext.getInstance();
+
+      context.addEventListener(
+        cast.framework.system.event,(event)=>{
+          console.log(event);
+        }
+      );
+
       const playerManager = context.getPlayerManager();
+      
+
       playerManager.addEventListener(
         cast.framework.events.EventType.MEDIA_STATUS, (event) => {
           console.log(event);
